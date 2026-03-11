@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.inputmethodservice.InputMethodService;
+import android.os.IBinder;
 import android.util.Base64;
 import android.util.Log;
 import android.view.InputDevice;
@@ -13,6 +14,8 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
+
+import java.lang.reflect.Method;
 
 public class AdbIME extends InputMethodService {
 	private String IME_MESSAGE = "ADB_INPUT_TEXT";
@@ -28,16 +31,32 @@ public class AdbIME extends InputMethodService {
 	private String IME_ACTION_NEXT = "ADB_ACTION_NEXT";
 	private String IME_ACTION_SEND = "ADB_ACTION_SEND";
 	private BroadcastReceiver mReceiver = null;
+	private static final String TAG = "UIWAIT";
+
+	/**
+	 * Cached binder for IUiAutomationTextInput service.
+	 */
+	private android.os.IBinder mTextInputBinder = null;
+
+	/** AIDL interface descriptor for IUiAutomationTextInput. */
+	private static final String TEXT_INPUT_DESCRIPTOR =
+			"com.android.internal.view.IUiAutomationTextInput";
+	/** Transaction code for setTextWithToken (FIRST_CALL_TRANSACTION + 0). */
+	private static final int TRANSACTION_setTextWithToken =
+			android.os.IBinder.FIRST_CALL_TRANSACTION + 0;
 
 	@Override
-	public View onCreateInputView() {
-		View mInputView = getLayoutInflater().inflate(R.layout.view, null);
+	public void onCreate() {
+		super.onCreate();
+		registerAdbReceiver();
+	}
 
+	private void registerAdbReceiver() {
 		if (mReceiver == null) {
 			IntentFilter filter = new IntentFilter(IME_MESSAGE);
 			filter.addAction(IME_CHARS);
 			filter.addAction(IME_KEYCODE);
-			filter.addAction(IME_MESSAGE); // IME_META_KEYCODE // Change IME_MESSAGE to get more values.
+			filter.addAction(IME_MESSAGE);
 			filter.addAction(IME_EDITORCODE);
 			filter.addAction(IME_MESSAGE_B64);
 			filter.addAction(IME_CLEAR_TEXT);
@@ -49,7 +68,11 @@ public class AdbIME extends InputMethodService {
 			mReceiver = new AdbReceiver();
 			registerReceiver(mReceiver, filter);
 		}
+	}
 
+	@Override
+	public View onCreateInputView() {
+		View mInputView = getLayoutInflater().inflate(R.layout.view, null);
 		return mInputView;
 	}
 
@@ -127,9 +150,20 @@ public class AdbIME extends InputMethodService {
 				}
 
 				if (msg != null) {
-					InputConnection ic = getCurrentInputConnection();
-					if (ic != null)
-						ic.commitText(msg, 1);
+					long token = intent.getLongExtra("token", 0);
+					if (token != 0) {
+						// Tokenized path: route through system service for fence tracking
+						int displayId = intent.getIntExtra("displayId", -1);
+						if (displayId < 0) {
+							displayId = getCurrentDisplayId();
+						}
+						callSetTextWithToken(msg, token, displayId);
+					} else {
+						// Legacy path: direct commitText
+						InputConnection ic = getCurrentInputConnection();
+						if (ic != null)
+							ic.commitText(msg, 1);
+					}
 				}
 			}
 
@@ -218,6 +252,66 @@ public class AdbIME extends InputMethodService {
 					ic.performEditorAction(EditorInfo.IME_ACTION_SEND);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Returns the display ID this IME is currently serving.
+	 * Uses the IME window's display; falls back to DEFAULT_DISPLAY (0).
+	 */
+	private int getCurrentDisplayId() {
+		try {
+			if (getWindow() != null && getWindow().getWindow() != null) {
+				View decor = getWindow().getWindow().getDecorView();
+				if (decor != null && decor.getDisplay() != null) {
+					return decor.getDisplay().getDisplayId();
+				}
+			}
+		} catch (Exception e) {
+			Log.w(TAG, "getCurrentDisplayId: failed, defaulting to 0", e);
+		}
+		return 0;
+	}
+
+	private void callSetTextWithToken(String text, long token, int displayId) {
+		try {
+			if (mTextInputBinder == null) {
+				Class<?> smClass = Class.forName("android.os.ServiceManager");
+				Method getService = smClass.getMethod("getService", String.class);
+				mTextInputBinder = (android.os.IBinder) getService.invoke(
+						null, "ui_automation_text_input");
+				if (mTextInputBinder == null) {
+					Log.w(TAG, "callSetTextWithToken: service not found, "
+							+ "falling back to direct commitText");
+					InputConnection ic = getCurrentInputConnection();
+					if (ic != null) ic.commitText(text, 1);
+					return;
+				}
+			}
+
+			// Build the Parcel matching AIDL-generated Proxy.setTextWithToken()
+			android.os.Parcel data = android.os.Parcel.obtain();
+			android.os.Parcel reply = android.os.Parcel.obtain();
+			try {
+				data.writeInterfaceToken(TEXT_INPUT_DESCRIPTOR);
+				data.writeString(text);
+				data.writeLong(token);
+				data.writeInt(displayId);
+				mTextInputBinder.transact(TRANSACTION_setTextWithToken,
+						data, reply, 0);
+				reply.readException();
+				Log.d(TAG, "callSetTextWithToken: success, token=" + token
+						+ " displayId=" + displayId);
+			} finally {
+				data.recycle();
+				reply.recycle();
+			}
+		} catch (Exception e) {
+			Log.e(TAG, "callSetTextWithToken: transact failed, "
+					+ "falling back to direct commitText", e);
+			// Fallback: direct commitText (no token/fence tracking)
+			InputConnection ic = getCurrentInputConnection();
+			if (ic != null) ic.commitText(text, 1);
 		}
 	}
 }
