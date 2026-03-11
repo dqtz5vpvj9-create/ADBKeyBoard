@@ -31,12 +31,23 @@ Download APK from release page
 Build and install APK
 ---------------------
 
+Requires: Java 17, Gradle 8.3, AGP 8.1.0 (compileSdk 33, minSdk 21).
+
 With one device or emulator connected, use these simple steps to install the keyboard:
 
  * Get source: `git clone https://github.com/senzhk/ADBKeyBoard.git`
  * Go into project dir `cd ADBKeyBoard`
  * Set Android SDK location: `export ANDROID_HOME=$HOME/Android/Sdk` or edit file `local.properties`
- * Build and install: `./gradlew installDebug`
+ * Build: `./gradlew assembleDebug`
+ * Install: `adb install keyboardservice/build/outputs/apk/debug/keyboardservice-debug.apk`
+ * Or build and install in one step: `./gradlew installDebug`
+
+**Note**: ADBKeyBoard is a user-installed APK (not part of the AOSP system image). After a Cuttlefish CVD restart or factory reset, you must re-install and re-activate:
+```
+adb install keyboardservice/build/outputs/apk/debug/keyboardservice-debug.apk
+adb shell ime enable com.android.adbkeyboard/.AdbIME
+adb shell ime set com.android.adbkeyboard/.AdbIME
+```
 
 How to Use
 ----------
@@ -91,6 +102,25 @@ adb shell am broadcast -a ADB_INPUT_TEXT --es mcode '4096+8192,29' // two metaSt
 
 6. CLEAR all text (starting from v2.0)
 adb shell am broadcast -a ADB_CLEAR_TEXT
+
+7. Tokenized text input (for AOSP UI automation fence system)
+
+* Send text with a UiActionToken for deterministic fence-based completion detection.
+* When token != 0, AdbIME routes through IUiAutomationTextInput AIDL to system_server,
+  which delivers text to the focused app atomically on the UI thread with fence emission.
+* When token == 0 or absent, behaves identically to normal ADB_INPUT_B64.
+
+adb shell am broadcast -a ADB_INPUT_B64 --es msg `echo -n 'hello' | base64` --el token 12345
+
+* Optionally specify displayId for multi-display systems (default: auto-detect from IME window):
+adb shell am broadcast -a ADB_INPUT_B64 --es msg `echo -n 'hello' | base64` --el token 12345 --ei displayId 1
+
+* The tokenized path produces 3 fence events via AccessibilityService:
+  - DISPATCH_END: text committed to EditText
+  - FRAME: UI frame rendered
+  - PRESENT: frame presented on display
+* Plus 1 target info event (TYPE_UI_AUTOMATION_TEXT_TARGET) with resource_id, class_name, bounds
+  of the focused EditText, emitted before DISPATCH_END.
 
 </pre>
 
