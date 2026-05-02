@@ -70,7 +70,7 @@ Key design: token push + deleteSurroundingText + commitText + pop + target info 
 
 **Phase 3: AOSP Framework — Target Element Info (M8.3)** ✓
 
-7. ✅ **Define `TYPE_UI_AUTOMATION_TEXT_TARGET = 0x08000000`** — Carries token, resource_id, class_name, bounds. Emitted before DISPATCH_END.
+7. ✅ **Define `TYPE_UI_AUTOMATION_TEXT_TARGET = 0x80000000`** — Carries token, resource_id, class_name, bounds. Emitted before DISPATCH_END.
    - `frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java`
 
 8. ✅ **Emit target info after commitText** — Extracts `getIdResourceName()`, `getClass().getName()`, `getBoundsOnScreen()` from focused EditText.
@@ -110,7 +110,7 @@ Key design: token push + deleteSurroundingText + commitText + pop + target info 
 | AOSP App-side | `frameworks/base/core/java/android/view/inputmethod/InputMethodManager.java`                 | Handle `MSG_SET_TEXT_WITH_TOKEN`: push token, delete+commitText, pop, emit target info, fire fence               |
 | AOSP View     | `frameworks/base/core/java/android/view/ViewRootImpl.java`                                   | Add `public getUiDispatchFenceController()` accessor                                                      |
 | AOSP Fence    | `frameworks/base/core/java/android/view/UiDispatchFenceController.java`                      | Add `onTextInputDone()` — simplified `onTerminalInputDone()` without semantic tail gating                       |
-| AOSP A11y     | `frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java`               | New `TYPE_UI_AUTOMATION_TEXT_TARGET = 0x08000000` constant + @IntDef + toString                                  |
+| AOSP A11y     | `frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java`               | New `TYPE_UI_AUTOMATION_TEXT_TARGET = 0x80000000` constant + @IntDef + toString                                  |
 | Host (AutoDroid) | input_event.py                                                                            | Pass token in broadcast                                                                                         |
 | Host (AutoDroid) | accessibility_event_client.py                                                             | Parse new event type                                                                                            |
 | Host (AutoDroid) | event_based_wait.py                                                                       | Use fences for TYPE in Explore                                                                                  |
